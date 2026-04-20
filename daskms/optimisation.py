@@ -66,7 +66,11 @@ def _fully_inline_task(task, dsk, only_from=None):
     eligible = (deps & only_from) if only_from is not None else (deps & dsk.keys())
     if not eligible:
         return task
-    sub = {dep: _fully_inline_task(dsk[dep], dsk, only_from) for dep in eligible if dep in dsk}
+    sub = {
+        dep: _fully_inline_task(dsk[dep], dsk, only_from)
+        for dep in eligible
+        if dep in dsk
+    }
     if not sub:
         return task
     return task.substitute(sub)
@@ -332,7 +336,9 @@ def inlined_array(a, inline_arrays=None):
 
             combined_new = _make_new_style_dsk(combined)
             layers[layer_name] = {
-                k: _fully_inline_task(combined_new[k], combined_new, only_from=inline_keys)
+                k: _fully_inline_task(
+                    combined_new[k], combined_new, only_from=inline_keys
+                )
                 for k in layer_keys
             }
 
