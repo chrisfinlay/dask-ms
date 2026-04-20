@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
-from threading import Lock
 import uuid
-from weakref import WeakValueDictionary, WeakKeyDictionary
+from threading import Lock
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 import dask.array as da
 from dask.core import flatten
