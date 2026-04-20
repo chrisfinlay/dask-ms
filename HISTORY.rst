@@ -2,6 +2,14 @@
 History
 =======
 
+0.2.30 (2026-04-20)
+-------------------
+* Support dask >= 2024.11.0 (TaskSpec refactor): replace removed ``_execute_task``
+  with a ``convert_legacy_graph`` + ``Task.substitute`` based inlining strategy in
+  ``optimisation.py``, handling mixed graphs where dask-ms tuple tasks and new-style
+  Task objects coexist (:pr:`368`)
+* Remove ``dask < 2024.11.0`` upper-bound pin from ``pyproject.toml`` (:pr:`368`)
+
 0.2.29 (2026-01-19)
 -------------------
 * Increase support and consistency for column grouping in ``xds_from_katdal`` (:pr:`367`)
