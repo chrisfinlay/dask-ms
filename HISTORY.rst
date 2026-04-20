@@ -9,6 +9,9 @@ History
   ``optimisation.py``, handling mixed graphs where dask-ms tuple tasks and new-style
   Task objects coexist (:pr:`368`)
 * Remove ``dask < 2024.11.0`` upper-bound pin from ``pyproject.toml`` (:pr:`368`)
+* Fix writes of arrays implementing the ``__array__`` protocol (JAX, CuPy,
+  PyTorch, etc.) to MS files by converting via ``np.asarray()`` before
+  casacore ``putcol`` calls (:pr:`370`)
 
 0.2.29 (2026-01-19)
 -------------------

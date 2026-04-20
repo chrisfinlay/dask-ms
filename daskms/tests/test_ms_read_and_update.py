@@ -5,8 +5,8 @@ import sys
 import dask
 import dask.array as da
 import numpy as np
-from numpy.testing import assert_array_equal
 import pytest
+from numpy.testing import assert_array_equal
 
 try:
     from dask.optimization import key_split
@@ -365,6 +365,166 @@ def test_mismatched_rowid(ms):
 
 def test_request_rowid(ms):
     xdsl = xds_from_ms(ms, columns=["TIME", "ROWID"])  # noqa
+
+
+class _ArrayLike:
+    """Minimal __array__ protocol object, standing in for JAX, CuPy, PyTorch, etc."""
+
+    def __init__(self, data):
+        self._data = np.asarray(data)
+
+    def __array__(self, dtype=None, copy=None):
+        return self._data if dtype is None else self._data.astype(dtype)
+
+    @property
+    def shape(self):
+        return self._data.shape
+
+    @property
+    def dtype(self):
+        return self._data.dtype
+
+    @property
+    def ndim(self):
+        return self._data.ndim
+
+    def __getitem__(self, item):
+        return self._data[item]
+
+    def __len__(self):
+        return len(self._data)
+
+
+def test_array_protocol_write(ms):
+    """Arrays implementing __array__ (JAX, CuPy, PyTorch, ...) must be writable.
+
+    Uses da.from_array: some libraries (JAX, zarr) are converted to numpy
+    eagerly during graph construction, so this test covers the case where
+    the chunk arrives at putter_wrapper already converted.
+    """
+    xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims = xds.sizes
+    chunks = xds.chunks
+
+    array_like = _ArrayLike(
+        np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    )
+    da_data = da.from_array(
+        array_like, chunks=(chunks["row"], dims["chan"], dims["corr"])
+    )
+
+    nds = xds.assign(DATA=(("row", "chan", "corr"), da_data))
+    (write,) = xds_to_table(nds, ms, ["DATA"])
+    dask.compute(write)
+
+    result = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    assert_array_equal(result.DATA.data, np.zeros_like(result.DATA.values))
+
+
+def test_map_blocks_array_protocol_write(ms):
+    """da.map_blocks returning non-numpy chunks must be writable.
+
+    This is the tab-sim / JAX pattern: a JAX-jitted function is wrapped in
+    map_blocks, its output (a jax.Array) becomes the raw dask chunk and is
+    never eagerly converted to numpy.  putter_wrapper must handle it via the
+    __array__ protocol.
+    """
+    xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims = xds.sizes
+    chunks = xds.chunks
+
+    np_data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    da_input = da.from_array(
+        np_data, chunks=(chunks["row"], dims["chan"], dims["corr"])
+    )
+
+    # Simulate a JAX/torch function that returns non-numpy chunks
+    da_data = da.map_blocks(
+        lambda block: _ArrayLike(block), da_input, dtype=np_data.dtype
+    )
+
+    nds = xds.assign(DATA=(("row", "chan", "corr"), da_data))
+    (write,) = xds_to_table(nds, ms, ["DATA"])
+    dask.compute(write)
+
+    result = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    assert_array_equal(result.DATA.data, np_data)
+
+
+def test_from_delayed_array_protocol_write(ms):
+    """da.from_delayed with non-numpy chunks must be writable.
+
+    This is the PyTorch pattern: libraries whose dtype objects are not
+    numpy-compatible must be wrapped via from_delayed with an explicit dtype.
+    The chunk is never inspected at graph construction time and arrives at
+    putter_wrapper unconverted.
+    """
+    xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims = xds.sizes
+    chunks = xds.chunks
+
+    np_data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    row_chunks = chunks["row"]
+    nchan, ncorr = dims["chan"], dims["corr"]
+
+    parts, row = [], 0
+    for rc in row_chunks:
+        chunk = _ArrayLike(np_data[row : row + rc])
+        parts.append(
+            da.from_delayed(
+                dask.delayed(chunk), shape=(rc, nchan, ncorr), dtype=np_data.dtype
+            )
+        )
+        row += rc
+    da_data = da.concatenate(parts, axis=0)
+
+    nds = xds.assign(DATA=(("row", "chan", "corr"), da_data))
+    (write,) = xds_to_table(nds, ms, ["DATA"])
+    dask.compute(write)
+
+    result = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    assert_array_equal(result.DATA.data, np_data)
+
+
+def test_delayed_chain_array_protocol_write(ms):
+    """Chained dask.delayed returning non-numpy chunks must be writable.
+
+    Represents a deep computation graph where the final step of each chain
+    returns a non-numpy array-protocol object, as would happen when multiple
+    delayed JAX operations are composed before writing.
+    """
+    xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims = xds.sizes
+    chunks = xds.chunks
+
+    np_data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    row_chunks = chunks["row"]
+    nchan, ncorr = dims["chan"], dims["corr"]
+
+    @dask.delayed
+    def step1(arr):
+        return arr * 1.0  # numpy in
+
+    @dask.delayed
+    def step2(arr):
+        return _ArrayLike(arr)  # non-numpy out — the final step returns array-protocol
+
+    parts, row = [], 0
+    for rc in row_chunks:
+        chunk = np_data[row : row + rc]
+        result = step2(step1(chunk))
+        parts.append(
+            da.from_delayed(result, shape=(rc, nchan, ncorr), dtype=np_data.dtype)
+        )
+        row += rc
+    da_data = da.concatenate(parts, axis=0)
+
+    nds = xds.assign(DATA=(("row", "chan", "corr"), da_data))
+    (write,) = xds_to_table(nds, ms, ["DATA"])
+    dask.compute(write)
+
+    result = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    assert_array_equal(result.DATA.data, np_data)
 
 
 def test_postprocess_ms(ms):
