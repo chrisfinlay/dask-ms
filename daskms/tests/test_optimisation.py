@@ -17,6 +17,8 @@ from daskms.optimisation import (
     Key,
     _key_cache,
     _array_cache_cache,
+    _DASK_HAS_LEGACY_TASKS,
+    _CachedCompute,
 )
 
 
@@ -124,7 +126,12 @@ def test_cached_data_token(token):
 
     dsk = dict(carray.__dask_graph__())
     k, v = dsk.popitem()
-    cache = v[1]
+    # Old dask: v = (cache_entry, cache, Key(k), ...)  → v[1] is cache
+    # New dask: v = (_CachedCompute(cache, k, task),)  → v[0]._cache is cache
+    if _DASK_HAS_LEGACY_TASKS:
+        cache = v[1]
+    else:
+        cache = v[0]._cache
 
     if token is None:
         assert cache.token is not None
