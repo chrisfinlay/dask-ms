@@ -2,6 +2,13 @@
 History
 =======
 
+0.2.31 (unreleased)
+-------------------
+* Fix writes for arrays from array API compatible libraries (JAX, CuPy,
+  PyTorch, etc.) using ``is_array_api_obj()`` for detection and
+  ``to_device_cpu()`` for safe GPU-to-CPU transfer before casacore
+  ``putcol`` calls, via a vendored subset of ``array-api-compat`` (:pr:`370`)
+
 0.2.30 (2026-04-20)
 -------------------
 * Support dask >= 2024.11.0 (TaskSpec refactor): replace removed ``_execute_task``
@@ -9,10 +16,6 @@ History
   ``optimisation.py``, handling mixed graphs where dask-ms tuple tasks and new-style
   Task objects coexist (:pr:`368`)
 * Remove ``dask < 2024.11.0`` upper-bound pin from ``pyproject.toml`` (:pr:`368`)
-* Fix writes for arrays from array API compatible libraries (JAX, CuPy,
-  PyTorch, etc.) using ``is_array_api_obj()`` for detection and
-  ``to_device_cpu()`` for safe GPU-to-CPU transfer before casacore
-  ``putcol`` calls, via a vendored subset of ``array-api-compat`` (:pr:`370`)
 
 0.2.29 (2026-01-19)
 -------------------
