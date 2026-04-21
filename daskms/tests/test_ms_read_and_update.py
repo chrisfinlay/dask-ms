@@ -510,7 +510,9 @@ def test_delayed_chain_array_protocol_write(ms):
 
     @dask.delayed
     def step2(arr):
-        return _ArrayLike(arr)  # non-numpy out — the final step returns an array API object
+        return _ArrayLike(
+            arr
+        )  # non-numpy out — the final step returns an array API object
 
     parts, row = [], 0
     for rc in row_chunks:
