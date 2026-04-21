@@ -34,7 +34,9 @@ def _make_fake_cupy():
             return self._data
 
         def __array__(self, dtype=None, copy=None):
-            raise RuntimeError("Cannot call __array__ on a GPU array — use .get() first")
+            raise RuntimeError(
+                "Cannot call __array__ on a GPU array — use .get() first"
+            )
 
         @property
         def shape(self):
