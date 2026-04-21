@@ -8,6 +8,13 @@ History
   PyTorch, etc.) using ``is_array_api_obj()`` for detection and
   ``to_device_cpu()`` for safe GPU-to-CPU transfer before casacore
   ``putcol`` calls, via a vendored subset of ``array-api-compat`` (:pr:`370`)
+* Add mock-based unit tests for ``is_array_api_obj`` and ``to_device_cpu``
+  using fake CuPy/PyTorch stubs injected into ``sys.modules``; GPU mock
+  arrays raise on ``__array__`` unless the CPU transfer path is exercised
+  (:pr:`370`)
+* Document writing JAX, CuPy, and PyTorch arrays with dask-ms, including
+  the ``da.from_delayed`` pattern required for PyTorch due to
+  non-NumPy-compatible dtype objects (:pr:`370`)
 
 0.2.30 (2026-04-20)
 -------------------
