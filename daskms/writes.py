@@ -407,7 +407,7 @@ def add_row_orders(data, table_proxy, prev=None):
         Indicate that row resorting should not occur by default
     """
     if isinstance(data, np.ndarray) or hasattr(data, "__array__"):
-        rows = np.asarray(data).shape[0]
+        rows = len(data)
     elif isinstance(data, dict):
         rows = len(data)
     else:
