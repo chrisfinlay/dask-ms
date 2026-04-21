@@ -368,10 +368,13 @@ def test_request_rowid(ms):
 
 
 class _ArrayLike:
-    """Minimal __array__ protocol object, standing in for JAX, CuPy, PyTorch, etc."""
+    """Minimal array API compatible object, standing in for JAX, CuPy, PyTorch, etc."""
 
     def __init__(self, data):
         self._data = np.asarray(data)
+
+    def __array_namespace__(self, api_version=None):
+        return np
 
     def __array__(self, dtype=None, copy=None):
         return self._data if dtype is None else self._data.astype(dtype)
@@ -396,7 +399,7 @@ class _ArrayLike:
 
 
 def test_array_protocol_write(ms):
-    """Arrays implementing __array__ (JAX, CuPy, PyTorch, ...) must be writable.
+    """Arrays implementing the array API (JAX, CuPy, PyTorch, ...) must be writable.
 
     Uses da.from_array: some libraries (JAX, zarr) are converted to numpy
     eagerly during graph construction, so this test covers the case where
@@ -426,8 +429,8 @@ def test_map_blocks_array_protocol_write(ms):
 
     This is the tab-sim / JAX pattern: a JAX-jitted function is wrapped in
     map_blocks, its output (a jax.Array) becomes the raw dask chunk and is
-    never eagerly converted to numpy.  putter_wrapper must handle it via the
-    __array__ protocol.
+    never eagerly converted to numpy.  putter_wrapper must handle it via
+    is_array_api_obj detection.
     """
     xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
     dims = xds.sizes
@@ -507,7 +510,7 @@ def test_delayed_chain_array_protocol_write(ms):
 
     @dask.delayed
     def step2(arr):
-        return _ArrayLike(arr)  # non-numpy out — the final step returns array-protocol
+        return _ArrayLike(arr)  # non-numpy out — the final step returns an array API object
 
     parts, row = [], 0
     for rc in row_chunks:

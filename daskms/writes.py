@@ -7,6 +7,7 @@ import dask.array as da
 import numpy as np
 from dask.highlevelgraph import HighLevelGraph
 
+from daskms.array_api_utils import is_array_api_obj, to_device_cpu
 from daskms.columns import dim_extents_array
 from daskms.constants import DASKMS_PARTITION_KEY
 from daskms.dataset import Dataset
@@ -186,8 +187,8 @@ def putter_wrapper(row_orders, *args):
                 "r%d" % (i + 1): data["r%d" % (s + 1)] for i, s in enumerate(resort)
             }
 
-    elif isinstance(data, np.ndarray) or hasattr(data, "__array__"):
-        data = np.asarray(data)
+    elif is_array_api_obj(data):
+        data = np.asarray(to_device_cpu(data))
         # Infer output shape
         out_shape = (1,) * len(data.shape)
 
@@ -406,8 +407,8 @@ def add_row_orders(data, table_proxy, prev=None):
     None
         Indicate that row resorting should not occur by default
     """
-    if isinstance(data, np.ndarray) or hasattr(data, "__array__"):
-        rows = len(data)
+    if is_array_api_obj(data):
+        rows = data.shape[0]
     elif isinstance(data, dict):
         rows = len(data)
     else:
