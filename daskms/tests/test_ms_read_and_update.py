@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import types
 
 import dask
 import dask.array as da
@@ -13,6 +14,7 @@ try:
 except ImportError:
     from dask.utils import key_split
 
+from daskms.array_api_utils import _issubclass_fast
 from daskms.constants import DASKMS_PARTITION_KEY
 from daskms.dask_ms import xds_from_ms, xds_from_table, xds_to_table
 from daskms.patterns import lazy_import
@@ -565,3 +567,181 @@ def test_postprocess_ms(ms):
             "chan": (1,) * ds.sizes["chan"],
             "corr": (1,) * ds.sizes["corr"],
         }
+
+
+# ── GPU-mock write path tests ─────────────────────────────────────────────────
+#
+# Inject fake cupy / torch modules so that _issubclass_fast matches the mock
+# classes without requiring real GPU hardware or installed GPU libraries.
+# The GPU variants raise on __array__ until to_device_cpu is called.
+
+
+def _make_gpu_cupy_array(data):
+    """Return a GpuArray instance backed by a fresh fake-cupy module."""
+    mod = types.ModuleType("cupy")
+
+    class GpuArray:
+        # Tells numpy/dask this is an array-like object (needed for dask's is_arraylike),
+        # but opts out of ufunc dispatch (correct for GPU arrays that don't speak numpy).
+        __array_ufunc__ = None
+
+        def __init__(self, d):
+            self._data = np.asarray(d)
+
+        def get(self):
+            return self._data
+
+        def __array__(self, dtype=None, copy=None):
+            raise RuntimeError("GPU CuPy array: call .get() before __array__")
+
+        @property
+        def shape(self):
+            return self._data.shape
+
+        @property
+        def dtype(self):
+            return self._data.dtype
+
+        @property
+        def ndim(self):
+            return self._data.ndim
+
+        def __getitem__(self, item):
+            return GpuArray(self._data[item])
+
+        def __len__(self):
+            return len(self._data)
+
+    mod.ndarray = GpuArray
+    return mod, GpuArray(data)
+
+
+def _make_gpu_torch_tensor(data):
+    """Return a GpuTensor instance backed by a fresh fake-torch module."""
+    mod = types.ModuleType("torch")
+
+    class Tensor:
+        __array_ufunc__ = None
+
+        def __init__(self, d):
+            self._data = np.asarray(d)
+
+        @property
+        def shape(self):
+            return self._data.shape
+
+        @property
+        def dtype(self):
+            return self._data.dtype
+
+        def __getitem__(self, item):
+            return CpuTensor(self._data[item])
+
+        def __len__(self):
+            return len(self._data)
+
+    class CpuTensor(Tensor):
+        def to(self, device):
+            return self
+
+        def __array__(self, dtype=None, copy=None):
+            return self._data if dtype is None else self._data.astype(dtype)
+
+    class GpuTensor(Tensor):
+        def to(self, device):
+            if device == "cpu":
+                return CpuTensor(self._data)
+            raise RuntimeError(f"Cannot move to {device!r}")
+
+        def __array__(self, dtype=None, copy=None):
+            raise RuntimeError("GPU Torch tensor: call .to('cpu') before __array__")
+
+        def __getitem__(self, item):
+            return GpuTensor(self._data[item])
+
+    mod.Tensor = Tensor
+    return mod, GpuTensor(data)
+
+
+@pytest.fixture()
+def fake_cupy_ms(ms):
+    """Yield (ms_path, GpuArray-of-zeros) with fake cupy injected."""
+    xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims = xds.sizes
+    data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    mod, gpu_arr = _make_gpu_cupy_array(data)
+    original = sys.modules.get("cupy")
+    sys.modules["cupy"] = mod
+    _issubclass_fast.cache_clear()
+    yield ms, gpu_arr, data
+    if original is None:
+        sys.modules.pop("cupy", None)
+    else:
+        sys.modules["cupy"] = original
+    _issubclass_fast.cache_clear()
+
+
+@pytest.fixture()
+def fake_torch_ms(ms):
+    """Yield (ms_path, GpuTensor-of-zeros) with fake torch injected."""
+    xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims = xds.sizes
+    data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    mod, gpu_tensor = _make_gpu_torch_tensor(data)
+    original = sys.modules.get("torch")
+    sys.modules["torch"] = mod
+    _issubclass_fast.cache_clear()
+    yield ms, gpu_tensor, data
+    if original is None:
+        sys.modules.pop("torch", None)
+    else:
+        sys.modules["torch"] = original
+    _issubclass_fast.cache_clear()
+
+
+def _from_delayed_chunks(arr, row_chunks, shape_rest, dtype):
+    """Build a dask array from per-chunk delayed objects (avoids dtype introspection)."""
+    parts, row = [], 0
+    for rc in row_chunks:
+        chunk = arr[row : row + rc]
+        parts.append(
+            da.from_delayed(dask.delayed(chunk), shape=(rc,) + shape_rest, dtype=dtype)
+        )
+        row += rc
+    return da.concatenate(parts, axis=0)
+
+
+def test_fake_cupy_gpu_write(fake_cupy_ms):
+    """A fake CuPy GPU array must survive the full write path via to_device_cpu/.get()."""
+    ms_path, gpu_arr, expected = fake_cupy_ms
+    xds = xds_from_ms(ms_path, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims, chunks = xds.sizes, xds.chunks
+
+    da_data = da.from_array(gpu_arr, chunks=(chunks["row"], dims["chan"], dims["corr"]))
+    nds = xds.assign(DATA=(("row", "chan", "corr"), da_data))
+    (write,) = xds_to_table(nds, ms_path, ["DATA"])
+    dask.compute(write)
+
+    result = xds_from_ms(ms_path, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    assert_array_equal(result.DATA.values, expected)
+
+
+def test_fake_torch_gpu_write(fake_torch_ms):
+    """A fake PyTorch GPU tensor must survive the full write path via to_device_cpu/.to('cpu').
+
+    PyTorch tensors must be wrapped via from_delayed to avoid dtype introspection
+    at graph-construction time (torch dtypes are not numpy-compatible).
+    """
+    ms_path, gpu_tensor, expected = fake_torch_ms
+    xds = xds_from_ms(ms_path, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    dims, chunks = xds.sizes, xds.chunks
+
+    da_data = _from_delayed_chunks(
+        gpu_tensor, chunks["row"], (dims["chan"], dims["corr"]), expected.dtype
+    )
+    nds = xds.assign(DATA=(("row", "chan", "corr"), da_data))
+    (write,) = xds_to_table(nds, ms_path, ["DATA"])
+    dask.compute(write)
+
+    result = xds_from_ms(ms_path, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
+    assert_array_equal(result.DATA.values, expected)
