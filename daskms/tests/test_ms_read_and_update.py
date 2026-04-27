@@ -32,6 +32,10 @@ ct = lazy_import("casacore.tables")
 PY_37_GTE = sys.version_info[:2] >= (3, 7)
 
 
+def _make_linear_ramp_array(shape, dtype):
+    return np.reshape(np.arange(np.prod(shape), dtype=dtype), shape)
+
+
 @pytest.mark.parametrize(
     "group_cols",
     [
@@ -412,7 +416,9 @@ def test_array_protocol_write(ms):
     chunks = xds.chunks
 
     array_like = _ArrayLike(
-        np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+        _make_linear_ramp_array(
+            (dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64
+        )
     )
     da_data = da.from_array(
         array_like, chunks=(chunks["row"], dims["chan"], dims["corr"])
@@ -423,7 +429,9 @@ def test_array_protocol_write(ms):
     dask.compute(write)
 
     result = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
-    assert_array_equal(result.DATA.data, np.zeros_like(result.DATA.values))
+    assert_array_equal(
+        result.DATA.data, _make_linear_ramp_array(result.DATA.shape, result.DATA.dtype)
+    )
 
 
 def test_map_blocks_array_protocol_write(ms):
@@ -438,7 +446,9 @@ def test_map_blocks_array_protocol_write(ms):
     dims = xds.sizes
     chunks = xds.chunks
 
-    np_data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    np_data = _make_linear_ramp_array(
+        (dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64
+    )
     da_input = da.from_array(
         np_data, chunks=(chunks["row"], dims["chan"], dims["corr"])
     )
@@ -468,7 +478,9 @@ def test_from_delayed_array_protocol_write(ms):
     dims = xds.sizes
     chunks = xds.chunks
 
-    np_data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    np_data = _make_linear_ramp_array(
+        (dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64
+    )
     row_chunks = chunks["row"]
     nchan, ncorr = dims["chan"], dims["corr"]
 
@@ -502,7 +514,9 @@ def test_delayed_chain_array_protocol_write(ms):
     dims = xds.sizes
     chunks = xds.chunks
 
-    np_data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    np_data = _make_linear_ramp_array(
+        (dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64
+    )
     row_chunks = chunks["row"]
     nchan, ncorr = dims["chan"], dims["corr"]
 
@@ -668,7 +682,10 @@ def fake_cupy_ms(ms):
     """Yield (ms_path, GpuArray-of-zeros) with fake cupy injected."""
     xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
     dims = xds.sizes
-    data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    data = _make_linear_ramp_array(
+        (dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64
+    )
+
     mod, gpu_arr = _make_gpu_cupy_array(data)
     original = sys.modules.get("cupy")
     sys.modules["cupy"] = mod
@@ -686,7 +703,9 @@ def fake_torch_ms(ms):
     """Yield (ms_path, GpuTensor-of-zeros) with fake torch injected."""
     xds = xds_from_ms(ms, columns=["DATA"], group_cols=[], chunks={"row": 2})[0]
     dims = xds.sizes
-    data = np.zeros((dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64)
+    data = _make_linear_ramp_array(
+        (dims["row"], dims["chan"], dims["corr"]), dtype=np.complex64
+    )
     mod, gpu_tensor = _make_gpu_torch_tensor(data)
     original = sys.modules.get("torch")
     sys.modules["torch"] = mod
